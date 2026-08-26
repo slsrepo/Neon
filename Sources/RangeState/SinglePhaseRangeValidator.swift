@@ -5,6 +5,7 @@ import Rearrange
 public final class SinglePhaseRangeValidator<Content: VersionedContent> {
 	public typealias ContentRange = RangeValidator<Content>.ContentRange
 	public typealias Provider = HybridSyncAsyncValueProvider<ContentRange, Validation, Never>
+	public typealias Action = RangeValidator<Content>.Action
 
 	private struct ValidationOperation {
 		let contentRange: ContentRange
@@ -49,8 +50,8 @@ public final class SinglePhaseRangeValidator<Content: VersionedContent> {
 	@discardableResult
 	public func validate(
 		_ target: RangeTarget,
-		isolation: isolated (any Actor)
-	) -> RangeValidator<Content>.Action {
+		isolation: isolated (any Actor) = #isolation
+	) -> Action {
 		// capture this first, because we're about to start one
 		let outstanding = primaryValidator.hasOutstandingValidations
 
@@ -78,15 +79,6 @@ public final class SinglePhaseRangeValidator<Content: VersionedContent> {
 
 			return .none
 		}
-	}
-
-	@MainActor
-	@preconcurrency
-	@discardableResult
-	public func validate(
-		_ target: RangeTarget
-	) -> RangeValidator<Content>.Action {
-		validate(target, isolation: MainActor.shared)
 	}
 
 	private func completePrimaryValidation(of operation: ValidationOperation, with validation: Validation, isolation: isolated (any Actor)) {

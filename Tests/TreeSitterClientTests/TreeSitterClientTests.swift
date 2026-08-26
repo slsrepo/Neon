@@ -7,21 +7,39 @@ import TreeSitterClient
 import NeonTestsTreeSitterSwift
 
 struct TreeSitterClientTests {
-	@MainActor
-	@Test func synchronousQuery() throws {
-		let language = Language(tree_sitter_swift())
+	private static let swiftConfig: LanguageConfiguration = {
+		let language = Language(language: tree_sitter_swift())
 
 		let queryText = """
-("func" @a)
+["func"] @keyword.function
+["var" "let"] @keyword
 """
-		let query = try Query(language: language, data: Data(queryText.utf8))
 
-		let languageConfig = LanguageConfiguration(
-			tree_sitter_swift(),
-			name: "Swift",
-			queries: [.highlights: query]
-		)
+		let highlightQuery = try! Query(language: language, data: queryText.data(using: .utf8)!)
 
+		return LanguageConfiguration(language,
+									 name: "Swift",
+									 queries: [.highlights: highlightQuery])
+	}()
+
+	private static let selfInjectingSwiftConfig: LanguageConfiguration = {
+		let queryText = """
+((line_str_text) @injection.content (#set! injection.language "swift"))
+"""
+		let injectionQuery = try! Query(language: swiftConfig.language, data: queryText.data(using: .utf8)!)
+
+		var queries = swiftConfig.queries
+
+		queries[.injections] = injectionQuery
+
+		return LanguageConfiguration(swiftConfig.language,
+									 name: swiftConfig.name,
+									 queries: queries)
+	}()
+
+
+	@MainActor
+	@Test func synchronousQuery() throws {
 		let source = """
 func main() {
  print("hello!")
@@ -37,7 +55,7 @@ func main() {
 		)
 
 		let client = try TreeSitterClient(
-			rootLanguageConfig: languageConfig,
+			rootLanguageConfig: Self.swiftConfig,
 			configuration: clientConfig
 		)
 
@@ -45,10 +63,63 @@ func main() {
 
 		let highlights = try client.highlights(in: NSRange(0..<24), provider: provider, mode: .required)
 		let expected = [
-			NamedRange(name: "a", range: NSRange(0..<4), pointRange: Point(row: 0, column: 0)..<Point(row: 0, column: 8))
+			NamedRange(name: "keyword.function", range: NSRange(0..<4), pointRange: Point(row: 0, column: 0)..<Point(row: 0, column: 8))
 		]
 
 		#expect(highlights == expected)
+	}
+
+	@MainActor
+	@Test func synchronousQueryAfterEditAffectingInjection() async throws {
+		var source = """
+let host = 0
+"""
+
+		let clientConfig = TreeSitterClient.Configuration(
+			languageProvider: { name in
+				precondition(name == "swift")
+
+				return Self.swiftConfig
+			},
+			contentSnapshopProvider: { _ in .init(string: source) },
+			lengthProvider: { source.utf16.count },
+			invalidationHandler: { _ in },
+			locationTransformer: { _ in nil }
+		)
+
+		let client = try TreeSitterClient(
+			rootLanguageConfig: Self.selfInjectingSwiftConfig,
+			configuration: clientConfig
+		)
+
+		let provider = source.predicateTextProvider
+
+		let initialHighlights = try await client.highlights(in: NSRange(0..<source.utf16.count), provider: provider, mode: .required)
+		let expected = [
+			NamedRange(name: "keyword", range: NSRange(0..<3), pointRange: Point(row: 0, column: 0)..<Point(row: 0, column: 6))
+		]
+
+		await client.validationCompleted()
+
+		#expect(initialHighlights == expected)
+//
+		client.willChangeContent(in: NSRange(11..<12))
+		
+		source = """
+let host = "let inner = 1"
+"""
+
+		client.didChangeContent(in: NSRange(11..<12), delta: 14)
+
+		await client.validationCompleted()
+
+		await Task.yield()
+		try! await Task.sleep(nanoseconds: 1_000_000_000)
+		await Task.yield()
+
+		let editedHighlights = try await client.highlights(in: NSRange(0..<source.utf16.count), provider: provider, mode: .required)
+
+		#expect(editedHighlights != expected)
 	}
 }
 

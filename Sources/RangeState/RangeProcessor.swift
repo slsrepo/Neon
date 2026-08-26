@@ -59,6 +59,7 @@ public final class RangeProcessor {
 	private var targetProcessingLocation: Int = -1
 	private var version = 0
 	private var processedVersion = -1
+	public var pendingEvaluation = false
 
     public init(configuration: Configuration) {
         self.configuration = configuration
@@ -282,9 +283,11 @@ extension RangeProcessor {
 	}
 
 	private func scheduleFilling(in isolation: isolated (any Actor)) {
+		pendingEvaluation = true
 		Task {
 			self.continueFillingIfNeeded(isolation: isolation)
 
+			pendingEvaluation = false
 			// it is very important to double check here, in case
 			// any waiters stuck in and we have no more work to do
 			self.pendingEventQueue.handlePendingWaiters()

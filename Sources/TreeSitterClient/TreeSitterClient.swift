@@ -255,7 +255,7 @@ extension TreeSitterClient {
 		.init(
 			isolation: MainActor.shared,
 			rangeProcessor: rangeProcessor,
-			inputTransformer: { ($0.value.max, .optional) },
+			inputTransformer: { ($0.value.max, .required) },
 			syncValue: { versioned in
 				guard versioned.version == self.versionedContent.currentVersion else {
 					return .stale
@@ -332,8 +332,12 @@ extension TreeSitterClient {
 		return hasPendingChanges == false
 	}
 
-	private func validateSublayers(in set: IndexSet) {
+	private func validateSublayers(in set: IndexSet) -> SublayerValidator.Action {
 		sublayerValidator.validate(.set(set), isolation: MainActor.shared)
+	}
+
+	public func validationCompleted() async {
+		await sublayerValidator.validationCompleted(isolation: MainActor.shared)
 	}
 
 	private func executeQuery(_ clientQuery: ClientQuery) async throws -> some Sequence<QueryMatch> {
@@ -341,7 +345,8 @@ extension TreeSitterClient {
 
 		await rangeProcessor.processingCompleted(isolation: MainActor.shared)
 
-		validateSublayers(in: clientQuery.params.indexSet)
+		let action = validateSublayers(in: clientQuery.params.indexSet)
+		print(action)
 
 		let matches = try await layerTree.executeQuery(clientQuery.query, in: clientQuery.params.indexSet, isolation: MainActor.shared)
 
@@ -358,7 +363,10 @@ extension TreeSitterClient {
 
 				guard self.canAttemptSynchronousAccess(in: .set(set)) else { return nil }
 
-				self.validateSublayers(in: set)
+				let action = self.validateSublayers(in: set)
+				if case .needed = action {
+					return nil
+				}
 
 				return try self.layerTree.executeQuery(.highlights, in: set).highlights()
 			},
@@ -386,3 +394,4 @@ extension TreeSitterClient {
 		try await highlightsProvider.async(isolation: MainActor.shared, .init(range: range, textProvider: provider, mode: mode))
 	}
 }
+
